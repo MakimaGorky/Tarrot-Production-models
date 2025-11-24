@@ -6,105 +6,94 @@ using System.Text;
 
 namespace TarotProductionSystem
 {
-    // --- МОДЕЛЬ ПРАВИЛА ---
+    // --- КЛАСС ФАКТА ---
+    public class Fact
+    {
+        public string Value { get; set; }
+        public string TimeTag { get; set; } // "Прошлое", "Настоящее", "Будущее", "Mixed"
+        
+
+        public override string ToString() => $"{Value} [{TimeTag}]";
+
+        public override bool Equals(object obj)
+        {
+            if (obj is Fact f) return Value == f.Value && TimeTag == f.TimeTag;
+            return false;
+        }
+
+        public override int GetHashCode() => (Value + TimeTag).GetHashCode();
+    }
+
+    // --- КЛАСС ПРАВИЛА ---
     public class Rule
     {
         public string Id { get; set; }
-        public List<string> Conditions { get; set; } = new List<string>(); // Антецеденты (ЕСЛИ)
-        public string Conclusion { get; set; }       // Консеквент (ТО)
-        public string Explanation { get; set; }      // Объяснение (ПОЧЕМУ/ЧТО ЭТО)
-
-        public override string ToString()
-        {
-            return $"[{Id}]: IF ({string.Join(" AND ", Conditions)}) THEN {Conclusion}";
-        }
+        public List<string> Conditions { get; set; } = new List<string>();
+        public string Conclusion { get; set; }
+        public string Explanation { get; set; }
     }
 
-    // --- ПАРСЕР БАЗЫ ЗНАНИЙ ---
+    // --- ЗАГРУЗЧИК ---
     public static class KnowledgeBaseLoader
     {
         public static List<Rule> LoadFromFile(string filePath)
         {
             var rules = new List<Rule>();
+            if (!File.Exists(filePath)) return rules;
 
-            if (!File.Exists(filePath))
+            foreach (var line in File.ReadAllLines(filePath, Encoding.UTF8))
             {
-                Console.WriteLine($"ОШИБКА: Файл {filePath} не найден.");
-                return rules;
-            }
-
-            // Читаем все строки (Encoding.UTF8 важно для русского языка)
-            var lines = File.ReadAllLines(filePath, Encoding.UTF8);
-
-            foreach (var line in lines)
-            {
-                string cleanLine = line.Trim();
-                
-                // Пропускаем пустые строки и комментарии
-                if (string.IsNullOrEmpty(cleanLine) || cleanLine.StartsWith("//"))
-                    continue;
-
-                var parts = cleanLine.Split(';');
-
-                // Очищаем пробелы вокруг каждого элемента
-                for (int i = 0; i < parts.Length; i++) parts[i] = parts[i].Trim();
+                var clean = line.Trim();
+                if (string.IsNullOrEmpty(clean) || clean.StartsWith("//")) continue;
+                var parts = clean.Split(';').Select(p => p.Trim()).ToArray();
 
                 try
                 {
-                    // ВАРИАНТ 1: Факты первого уровня (Карта -> Значение)
-                    // Структура: ID; Карта; Значение; Объяснение
-                    // Пример: факт_1; 0 Шут; Новое начало; Символизирует обнуление...
                     if (parts.Length == 4)
-                    {
-                        rules.Add(new Rule
-                        {
-                            Id = parts[0],
-                            Conditions = new List<string> { parts[1] },
-                            Conclusion = parts[2],
-                            Explanation = parts[3]
-                        });
-                    }
-                    // ВАРИАНТ 2: Правила синтеза (Условие1 + Условие2 -> Вывод)
-                    // Структура: ID; Условие1; Условие2; Вывод; Объяснение
-                    // Пример: правило_1; Мудрость; Пробуждение; Понимание; Глубинное знание...
+                        rules.Add(new Rule { Id = parts[0], Conditions = { parts[1] }, Conclusion = parts[2], Explanation = parts[3] });
                     else if (parts.Length == 5)
-                    {
-                        rules.Add(new Rule
-                        {
-                            Id = parts[0],
-                            Conditions = new List<string> { parts[1], parts[2] },
-                            Conclusion = parts[3],
-                            Explanation = parts[4]
-                        });
-                    }
+                        rules.Add(new Rule { Id = parts[0], Conditions = { parts[1], parts[2] }, Conclusion = parts[3], Explanation = parts[4] });
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Ошибка парсинга строки: {line}\n{ex.Message}");
-                }
+                catch { }
             }
-
-            Console.WriteLine($"Успешно загружено правил: {rules.Count}");
             return rules;
         }
     }
 
-    // --- МАШИНА ВЫВОДА (Inference Engine) ---
+    // --- ДВИЖОК ВЫВОДА ---
     public class InferenceEngine
     {
         private List<Rule> _knowledgeBase;
-        private HashSet<string> _facts;
+        private HashSet<Fact> _facts;
+        
+        // Флаг стратегии: true = разрешить Mixed работать как Wildcard
+        private bool _allowMixedStrategy; 
 
-        public InferenceEngine(List<Rule> rules, List<string> initialFacts)
+        public InferenceEngine(List<Rule> rules, bool allowMixedStrategy)
         {
             _knowledgeBase = rules;
-            _facts = new HashSet<string>(initialFacts); // Case-sensitive для простоты, лучше привести к Lower
+            _facts = new HashSet<Fact>();
+            _allowMixedStrategy = allowMixedStrategy;
         }
 
-        // ПРЯМОЙ ВЫВОД
+        public void AddInitialFact(string cardName, string timeTag)
+        {
+            _facts.Add(new Fact { Value = cardName, TimeTag = timeTag });
+        }
+
+        public void PrintInitialFacts()
+        {
+            Console.WriteLine("\nИспользуем расклад:");
+
+            foreach (var fact in _facts)
+            {
+                Console.WriteLine(fact.ToString());
+            }
+        }
+
         public void RunForwardChaining()
         {
-            Console.WriteLine("\n--- ЗАПУСК ПРЯМОГО ВЫВОДА ---");
+            Console.WriteLine($"\n--- ЗАПУСК ПРЯМОГО ВЫВОДА (Режим: {(_allowMixedStrategy ? "Свободный/Mixed" : "Строгий")}) ---");
             bool newFactAdded = true;
             int step = 1;
 
@@ -113,113 +102,151 @@ namespace TarotProductionSystem
                 newFactAdded = false;
                 foreach (var rule in _knowledgeBase)
                 {
-                    // Если вывод уже известен, пропускаем
-                    if (_facts.Contains(rule.Conclusion)) continue;
+                    // Пропускаем, если такой вывод с (потенциально) любым тегом уже есть, 
+                    // чтобы не спамить, но для точности лучше проверять конкретные факты внутри.
+                    
+                    var matchingFacts = FindMatchingFactsForConditions(rule.Conditions);
 
-                    // Если все условия соблюдены
-                    if (rule.Conditions.All(c => _facts.Contains(c)))
+                    foreach (var combination in matchingFacts)
                     {
-                        Console.WriteLine($"Шаг {step++}: Сработало [{rule.Id}]");
-                        Console.WriteLine($"   ЕСЛИ: {string.Join(" + ", rule.Conditions)}");
-                        Console.WriteLine($"   ТО:   {rule.Conclusion}");
-                        Console.ForegroundColor = ConsoleColor.Cyan;
-                        Console.WriteLine($"   КОММЕНТАРИЙ: {rule.Explanation}");
-                        Console.ResetColor();
-                        
-                        _facts.Add(rule.Conclusion);
-                        newFactAdded = true;
-                    }
-                }
-            }
-            Console.WriteLine("--- Вывод завершен ---");
-        }
+                        // Пытаемся определить временной тег результата
+                        string newTimeTag = ResolveTimeTag(combination, rule);
 
-        // ОБРАТНЫЙ ВЫВОД (Для проверки гипотезы)
-        public bool RunBackwardChaining(string targetGoal)
-        {
-            Console.WriteLine($"\n--- ЗАПУСК ОБРАТНОГО ВЫВОДА (Цель: {targetGoal}) ---");
-            Stack<string> goalStack = new Stack<string>();
-            goalStack.Push(targetGoal);
+                        // Если newTimeTag == null, значит несовместимость времени
+                        if (newTimeTag == null) continue;
 
-            HashSet<string> provedGoals = new HashSet<string>(_facts);
-            List<string> derivationLog = new List<string>();
-            HashSet<string> currentPath = new HashSet<string>(); // Для защиты от циклов
+                        Fact newFact = new Fact { Value = rule.Conclusion, TimeTag = newTimeTag };
 
-            while (goalStack.Count > 0)
-            {
-                string currentGoal = goalStack.Peek();
-
-                if (provedGoals.Contains(currentGoal))
-                {
-                    goalStack.Pop();
-                    currentPath.Remove(currentGoal);
-                    continue;
-                }
-
-                // Ищем правила, ведущие к цели
-                var applicableRules = _knowledgeBase.Where(r => r.Conclusion == currentGoal).ToList();
-
-                if (applicableRules.Count == 0)
-                {
-                    // Тупик
-                    return false; 
-                }
-
-                bool ruleApplied = false;
-                bool hasPendingSubgoals = false;
-
-                foreach (var rule in applicableRules)
-                {
-                    if (rule.Conditions.Any(c => currentPath.Contains(c))) continue; // Цикл
-
-                    var missingConditions = rule.Conditions.Where(c => !provedGoals.Contains(c)).ToList();
-
-                    if (missingConditions.Count == 0)
-                    {
-                        // Доказано!
-                        provedGoals.Add(currentGoal);
-                        derivationLog.Add($"Доказано: {currentGoal}\n     (Правило {rule.Id}: {rule.Explanation})");
-                        
-                        goalStack.Pop();
-                        currentPath.Remove(currentGoal);
-                        ruleApplied = true;
-                        break;
-                    }
-                    else
-                    {
-                        foreach (var condition in missingConditions)
+                        if (!_facts.Contains(newFact))
                         {
-                            goalStack.Push(condition);
-                            currentPath.Add(condition);
+                            Console.WriteLine($"Шаг {step++}: [{rule.Id}]");
+                            Console.WriteLine($"   Использовано: {string.Join(" + ", combination.Select(f => f.ToString()))}");
+                            Console.WriteLine($"   Получено:     {newFact}");
+                            // Console.WriteLine($"   Суть: {rule.Explanation}"); // Можно раскомментить
+                            
+                            _facts.Add(newFact);
+                            newFactAdded = true;
                         }
-                        hasPendingSubgoals = true;
-                        break; // Идем вглубь
                     }
                 }
+            }
+        }
 
-                if (!ruleApplied && !hasPendingSubgoals) return false;
+        // --- ГЛАВНАЯ ЛОГИКА ОБРАБОТКИ ВРЕМЕНИ ---
+        private string ResolveTimeTag(List<Fact> ingredients, Rule rule)
+        {
+            var tags = ingredients.Select(f => f.TimeTag).Distinct().ToList();
+
+            // 1. ПРОВЕРКА: Требует ли правило конкретного времени (Слой 3)?
+            var requiredTime = rule.Conditions.FirstOrDefault(c => IsTimeKeyword(c));
+            
+            if (requiredTime != null)
+            {
+                // Правило вида: "Значение + Будущее -> Вывод"
+                // Находим факт-значение (не являющийся словом "Будущее")
+                var mainFact = ingredients.FirstOrDefault(f => !IsTimeKeyword(f.Value));
+                if (mainFact == null) return null;
+
+                bool exactMatch = (mainFact.TimeTag == requiredTime);
+                
+                // ВАЖНО: Если включена Loose стратегия, то "Mixed" считается подходящим для всего
+                bool mixedMatch = _allowMixedStrategy && (mainFact.TimeTag == "Mixed");
+
+                if (exactMatch || mixedMatch)
+                {
+                    // Если сработал mixedMatch, мы "схлопываем" неопределенность в конкретное время,
+                    // которого требовало правило. (Mixed + FutureRequirement -> Future Result)
+                    return requiredTime; 
+                }
+                else
+                {
+                    return null; // Например, есть "Прошлое", а правило требует "Будущее" -> Отказ.
+                }
             }
 
-            Console.WriteLine("ЦЕЛЬ ДОСТИГНУТА! Цепочка вывода:");
-            foreach (var log in derivationLog) Console.WriteLine(" -> " + log);
-            return true;
+            // 2. ОБЫЧНЫЙ СИНТЕЗ (Слой 1 и 2)
+            if (tags.Count == 1) return tags[0]; // Все ингредиенты из одного времени
+            
+            // Если ингредиенты разные (Past + Present), результат -> Mixed
+            return "Mixed"; 
         }
-        
+
+        private bool IsTimeKeyword(string s) => s == "Будущее" || s == "Настоящее" || s == "Прошлое";
+
+        private List<List<Fact>> FindMatchingFactsForConditions(List<string> conditions)
+        {
+            var results = new List<List<Fact>>();
+
+            if (conditions.Count == 1)
+            {
+                foreach (var f in _facts) if (f.Value == conditions[0]) results.Add(new List<Fact> { f });
+            }
+            else if (conditions.Count == 2)
+            {
+                string c1 = conditions[0];
+                string c2 = conditions[1];
+                var facts1 = _facts.Where(f => f.Value == c1).ToList();
+                var facts2 = _facts.Where(f => f.Value == c2).ToList();
+
+                if (!IsTimeKeyword(c2)) // Обычное правило (Fact + Fact)
+                {
+                    foreach (var f1 in facts1)
+                        foreach (var f2 in facts2)
+                            results.Add(new List<Fact> { f1, f2 });
+                }
+                else // Правило времени (Fact + "TimeKeyword")
+                {
+                    // Возвращаем (Fact + Пустышка с именем требуемого времени)
+                    foreach (var f1 in facts1)
+                        results.Add(new List<Fact> { f1, new Fact { Value = c2, TimeTag = "RuleRequirement" } });
+                    
+                    // Обратный порядок (TimeKeyword + Fact) - если вдруг в базе правила написаны иначе
+                    if(IsTimeKeyword(c1) && !IsTimeKeyword(c2))
+                    {
+                         var factsReal = _facts.Where(f => f.Value == c2).ToList();
+                         foreach (var f in factsReal)
+                             results.Add(new List<Fact> { new Fact { Value = c1, TimeTag = "RuleRequirement" }, f });
+                    }
+                }
+            }
+            return results;
+        }
+
         public void PrintFinalAdvice()
         {
-            // Ищем факты, которые похожи на советы (длинные предложения из 4 уровня)
-            // В твоей базе советы длинные, можно фильтровать по длине или по наличию в правилах 4 уровня
-            Console.WriteLine("\n=== ИТОГОВОЕ ПРЕДСКАЗАНИЕ ===");
-            foreach(var f in _facts)
+            Console.WriteLine("\n=== ПОЛУЧЕННЫЕ ПРЕДСКАЗАНИЯ ===");
+            var adviceFound = false;
+            foreach (var f in _facts)
             {
-                // Простая эвристика: если факт длинный (совет) и не является входной картой/временем
-                if(f.Length > 30) 
+                // Фильтр: длинные строки, похожие на советы
+                if (f.Value.Length > 40) 
                 {
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"★ {f}");
+                    Console.WriteLine($"★ {f.Value} ({f.TimeTag})");
                     Console.ResetColor();
+                    adviceFound = true;
                 }
             }
+            if(!adviceFound) Console.WriteLine("Нет сформированных советов. Попробуйте включить режим 'Mixed' или изменить карты.");
+        }
+    }
+
+    class FactPresets
+    {
+        // башня(П), дьявол(Н), колесо(Б) - пример с разным разрешением конфликтов.
+        public static void TotalSlayEmotion(InferenceEngine engine)
+        {
+            engine.AddInitialFact("XVI Башня", "Прошлое");
+            engine.AddInitialFact("XV Дьявол", "Настоящее");
+            engine.AddInitialFact("X Колесо Фортуны", "Будущее");
+        }
+
+        // Жрица(П), Суд(Н), Император(Б)
+        public static void CompletelyDefault(InferenceEngine engine)
+        {
+            engine.AddInitialFact("II Жрица", "Прошлое");
+            engine.AddInitialFact("XX Суд", "Настоящее");
+            engine.AddInitialFact("III Императрица", "Будущее");
         }
     }
 
@@ -227,67 +254,38 @@ namespace TarotProductionSystem
     {
         static void Main(string[] args)
         {
-            // 1. Создаем файл базы данных (чтобы он физически существовал)
-            string dbFileName = "database.txt";
-            CreateDatabaseFileIfNeeded(dbFileName);
+            string dbFile = "database.txt"; 
+            // Создание файла-заглушки, если нет (для теста)
+            if(!File.Exists(dbFile)) { File.WriteAllText(dbFile, "// Вставьте сюда вашу базу данных"); Console.WriteLine("Файл создан, заполните его!"); return; }
 
-            // 2. Загружаем правила
-            var rules = KnowledgeBaseLoader.LoadFromFile(dbFileName);
+            var rules = KnowledgeBaseLoader.LoadFromFile(dbFile);
 
-            if (rules.Count == 0) return;
-
-            // 3. Сценарий: Пользователь вытянул карты
-            // Давай возьмем цепочку, которая точно сработает по твоей базе:
-            // 0 Шут -> Новое начало
-            // XX Суд -> Пробуждение
-            // (Правило 2: Новое начало + Пробуждение -> Понимание) WRONG?
-            // Давай проверим "Правило 1": Мудрость (из II Жрица) + Пробуждение (из XX Суд) -> Понимание
-            // Правило 61: Понимание + Будущее -> Осознанный путь к будущему
-            // Правило 110: Осознанный путь к будущему + Устойчивость -> Совет...
-            
-            // Нам нужно получить "Устойчивость". Это "IV Император" -> "Стабильность"... 
-            // Хм, в правиле 4: Изобилие + Забота -> Устойчивость. (Императрица)
-            
-            // СОБЕРЕМ ТЕСТОВЫЙ НАБОР ФАКТОВ:
-            var initialFacts = new List<string> 
-            { 
-                "II Жрица",      // Даст "Мудрость"
-                "XX Суд",        // Даст "Пробуждение"
-                "III Императрица", // Даст "Изобилие", "Забота" -> "Устойчивость"
-                "Будущее"        // Контекст времени
-            };
-
-            Console.WriteLine($"Входные данные: {string.Join(", ", initialFacts)}");
-
-            // 4. Запуск прямого вывода
-            var engine = new InferenceEngine(rules, initialFacts);
-            engine.RunForwardChaining();
-            
-            engine.PrintFinalAdvice();
-
-            // 5. Запуск обратного вывода (проверка)
-            // Проверим, получили ли мы конкретный совет
-            string goal = "Будьте уверены в своих действиях, и они принесут стабильность в будущем.";
-            Console.WriteLine("\nНажмите Enter для проверки обратного вывода...");
-            Console.ReadLine();
-            
-            var engineBack = new InferenceEngine(rules, initialFacts);
-            bool success = engineBack.RunBackwardChaining(goal);
-            
-            if(!success) Console.WriteLine("Не удалось доказать цель по заданным картам.");
-
-            Console.ReadLine();
-        }
-
-        // Хелпер для создания файла с твоими данными
-        static void CreateDatabaseFileIfNeeded(string filename)
-        {
-            if (!File.Exists(filename))
+            while (true)
             {
-                // Тут я просто вставлю часть твоих данных для примера, 
-                // но в реальности ты просто положишь свой заполненный файл рядом с exe
-                Console.WriteLine("Файл базы данных не найден. Создайте файл database.txt с вашими правилами.");
-                // В реальном проекте просто создай текстовый файл в папке проекта
+                Console.Clear();
+                Console.WriteLine("=== СИСТЕМА ПРЕДСКАЗАНИЙ ТАРО ===");
+                Console.WriteLine("1. Строгий режим (Честный вывод: Прошлое + Настоящее != Будущее)");
+                Console.WriteLine("2. Свободный режим (Mixed стратегия: Смешанный опыт подходит ко всему)");
+                Console.WriteLine("0. Выход");
+                Console.Write("Выберите режим: ");
+                
+                var key = Console.ReadLine();
+                if (key == "0") break;
+
+                bool allowMixed = (key == "2");
+
+                var engine = new InferenceEngine(rules, allowMixed);
+                
+                // Начальный расклад
+                FactPresets.CompletelyDefault(engine);
+                engine.PrintInitialFacts();
+                
+                // Запуск
+                engine.RunForwardChaining();
+                engine.PrintFinalAdvice();
+
+                Console.WriteLine("\nНажмите Enter, чтобы вернуться в меню...");
+                Console.ReadLine();
             }
         }
     }
