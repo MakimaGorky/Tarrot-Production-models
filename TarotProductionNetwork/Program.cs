@@ -28,6 +28,20 @@ namespace TarotExpertSystem
         public string Explanation { get; set; }
     }
 
+    public class GoalFrame
+    {
+        public string Goal;                 // Какую цель доказываем
+        public List<Rule> ApplicableRules;  // Список всех правил для этой цели
+        public int CurrentRuleIndex;        // Какое правило пробуем сейчас
+        
+        public GoalFrame(string goal, List<Rule> rules)
+        {
+            Goal = goal;
+            ApplicableRules = rules;
+            CurrentRuleIndex = 0;
+        }
+    }
+    
     // ==========================================
     // 2. ДВИЖОК ВЫВОДА
     // ==========================================
@@ -55,7 +69,7 @@ namespace TarotExpertSystem
         public void RunForwardChaining()
         {
             OnLog?.Invoke($"--- ЗАПУСК ПРЯМОГО ВЫВОДА ---", Color.Black);
-            OnLog?.Invoke($"Режим: {(_allowMixedStrategy ? "Свободный (Смешанный)" : "Строгий")}", Color.Gray);
+            OnLog?.Invoke($"Режим: {(_allowMixedStrategy ? "Свободный (Mixed)" : "Строгий")}", Color.Gray);
             
             bool newFactAdded = true;
             int step = 1;
@@ -91,6 +105,7 @@ namespace TarotExpertSystem
             FindAndSendAdvice();
         }
 
+        // Не проверяет временные модификаторы карт.
         public void RunBackwardChaining(string targetGoal, List<string> knownCards)
         {
             OnLog?.Invoke($"--- ЗАПУСК ОБРАТНОГО ВЫВОДА ---", Color.Black);
@@ -169,12 +184,12 @@ namespace TarotExpertSystem
             {
                 var mainFact = ingredients.FirstOrDefault(f => !IsTimeKeyword(f.Value));
                 if (mainFact == null) return null;
-                return (mainFact.TimeTag == requiredTime || (_allowMixedStrategy && mainFact.TimeTag == "Смешанное")) ? requiredTime : null;
+                return (mainFact.TimeTag == requiredTime || (_allowMixedStrategy && mainFact.TimeTag == "Mixed")) ? requiredTime : null;
             }
             var tags = ingredients.Select(f => f.TimeTag).Distinct().ToList();
-            return tags.Count == 1 ? tags[0] : "Смешанное";
+            return tags.Count == 1 ? tags[0] : "Mixed";
         }
-
+        
         private bool IsTimeKeyword(string s) => s == "Будущее" || s == "Настоящее" || s == "Прошлое";
 
         private List<List<Fact>> FindMatchingFactsForConditions(List<string> conditions)
@@ -225,7 +240,7 @@ namespace TarotExpertSystem
     }
 
     // ==========================================
-    // 3. ГРАФИЧЕСКИЙ ИНТЕРФЕЙС (ИСПРАВЛЕННЫЙ)
+    // 3. ГРАФИЧЕСКИЙ ИНТЕРФЕЙС
     // ==========================================
     public class MainForm : Form
     {
@@ -244,7 +259,7 @@ namespace TarotExpertSystem
         public MainForm()
         {
             this.Text = "Продукционная модель: Таро Эксперт";
-            this.Size = new Size(1350, 850); // Чуть шире для удобства
+            this.Size = new Size(1350, 850);
             this.Font = new Font("Segoe UI", 10);
             this.StartPosition = FormStartPosition.CenterScreen;
             
@@ -272,58 +287,41 @@ namespace TarotExpertSystem
 
         private void InitializeCustomComponents()
         {
-            // 1. Главный сплит (Лог слева / Рабочая область справа)
-            var mainSplit = new SplitContainer 
-            { 
-                Dock = DockStyle.Fill, 
-                Orientation = Orientation.Vertical,
-                FixedPanel = FixedPanel.Panel1 // Фиксируем левую панель при ресайзе
-            };
+            var mainSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel1 };
             
-            // ЛЕВАЯ ЧАСТЬ (ЛОГ)
+            // ЛОГ (Слева)
             var groupLog = new GroupBox { Text = "Лог вывода", Dock = DockStyle.Fill, Padding = new Padding(10) };
             logBox = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BackColor = Color.White, BorderStyle = BorderStyle.None };
             groupLog.Controls.Add(logBox);
             mainSplit.Panel1.Controls.Add(groupLog);
 
-            // ПРАВАЯ ЧАСТЬ (ВСЁ ОСТАЛЬНОЕ)
+            // ПРАВАЯ ЧАСТЬ
             var rightPanel = new Panel { Dock = DockStyle.Fill };
             
-            // --- ПАНЕЛЬ УПРАВЛЕНИЯ (ВЕРХ) ---
+            // ПАНЕЛЬ УПРАВЛЕНИЯ
             var controlPanel = new GroupBox { Text = "Управление", Dock = DockStyle.Top, Height = 110 };
             
-            // Левая группа (Прямой вывод) - выравнивание по сетке
-            int col1X = 20;  // Радио-кнопки
-            int col2X = 20;  // Кнопки действий
-            int row1Y = 25;  // Первая строка
-            int row2Y = 60;  // Вторая строка
-
-            // Радио кнопки
+            int col1X = 20; int col2X = 20; int row1Y = 25; int row2Y = 60;
             rbStrict = new RadioButton { Text = "Строгий", Location = new Point(col1X, row1Y), AutoSize = true };
-            rbLoose = new RadioButton { Text = "Свободный (Смешанный)", Location = new Point(col1X + 100, row1Y), AutoSize = true, Checked = true };
-            
-            // Кнопки Прямого вывода и Сброса
+            rbLoose = new RadioButton { Text = "Свободный (Mixed)", Location = new Point(col1X + 100, row1Y), AutoSize = true, Checked = true };
             var btnRun = new Button { Text = "ПРЯМОЙ ВЫВОД", Location = new Point(col2X, row2Y), Size = new Size(160, 35), BackColor = Color.LightGreen, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
             var btnReset = new Button { Text = "Сброс карт", Location = new Point(col2X + 170, row2Y), Size = new Size(100, 35), BackColor = Color.LightCoral };
 
-            // Правая группа (Обратный вывод) - сдвигаем правее, чтобы не слипалось
-            int col3X = 350; // Начало зоны обратного вывода
-            
-            var lblGoal = new Label { Text = "Цель для обратного вывода (факты или совет):", Location = new Point(col3X, row1Y + 2), AutoSize = true };
-            txtGoal = new TextBox { Location = new Point(col3X, row2Y + 2), Width = 380, Height = 30 }; // Делаем широким
+            int col3X = 350; 
+            var lblGoal = new Label { Text = "Цель для обратного вывода:", Location = new Point(col3X, row1Y + 2), AutoSize = true };
+            txtGoal = new TextBox { Location = new Point(col3X, row2Y + 2), Width = 380, Height = 30 };
             btnBackward = new Button { Text = "ПРОВЕРИТЬ ГИПОТЕЗУ", Location = new Point(col3X + 390, row2Y), Size = new Size(180, 35), BackColor = Color.LightSkyBlue };
 
             controlPanel.Controls.AddRange(new Control[] { rbStrict, rbLoose, btnRun, btnReset, lblGoal, txtGoal, btnBackward });
             rightPanel.Controls.Add(controlPanel);
 
-            // --- ПАНЕЛЬ РЕЗУЛЬТАТА (НИЗ) ---
+            // РЕЗУЛЬТАТ
             var groupResult = new GroupBox { Text = "Итоговый совет / Результат", Dock = DockStyle.Bottom, Height = 100 };
             resultBox = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, Font = new Font("Segoe UI", 11, FontStyle.Bold), ScrollBars = ScrollBars.Vertical };
             groupResult.Controls.Add(resultBox);
             rightPanel.Controls.Add(groupResult);
 
-            // --- КАРТЫ (ЦЕНТР) ---
-            // Используем TableLayoutPanel для равномерного распределения
+            // КАРТЫ
             var cardsTable = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Color.WhiteSmoke };
             cardsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
             cardsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
@@ -336,12 +334,9 @@ namespace TarotExpertSystem
             cardsTable.Controls.Add(pnlPast, 0, 0);
             cardsTable.Controls.Add(pnlPresent, 1, 0);
             cardsTable.Controls.Add(pnlFuture, 2, 0);
-            
-            // Важно: BringToFront, чтобы таблица заняла всё оставшееся место между верхом и низом
             rightPanel.Controls.Add(cardsTable);
             cardsTable.BringToFront();
 
-            // Привязка событий
             btnRun.Click += (s, e) => RunForward();
             btnReset.Click += (s, e) => ResetAll();
             btnBackward.Click += (s, e) => RunBackward();
@@ -349,15 +344,140 @@ namespace TarotExpertSystem
             mainSplit.Panel2.Controls.Add(rightPanel);
             this.Controls.Add(mainSplit);
 
-            // 4. Инициализация кнопок добавления карт
             AddPlusButton(pnlPast, "Прошлое");
             AddPlusButton(pnlPresent, "Настоящее");
             AddPlusButton(pnlFuture, "Будущее");
 
-            // 5. Установка разделителя на 1/3 (делаем это в конце инициализации)
-            // Используем событие Load, чтобы размеры формы точно применились
             this.Load += (s, e) => { mainSplit.SplitterDistance = this.ClientSize.Width / 3; };
         }
+
+        // --- ЛОГИКА UI ---
+
+        private FlowLayoutPanel CreateColumn(string title)
+        {
+            var pnl = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle };
+            pnl.Controls.Add(new Label { Text = title, AutoSize = false, Width = 200, Height = 30, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 12, FontStyle.Bold), ForeColor = Color.DarkSlateGray });
+            return pnl;
+        }
+
+        private void AddPlusButton(FlowLayoutPanel panel, string timeTag)
+        {
+            var btn = new Button { Text = "+", Font = new Font("Consolas", 24), Size = new Size(160, 100), Cursor = Cursors.Hand };
+            btn.Click += (s, e) => 
+            {
+                // Показываем меню добавления новой карты
+                ShowCardSelectionMenu(btn, timeTag, null);
+            };
+            panel.Controls.Add(btn);
+        }
+
+        // ФИЧА: Замена карты
+        private Control CreateCardWidget(string cardName, string timeTag)
+        {
+            var p = new Panel { Size = new Size(160, 240), Margin = new Padding(3, 3, 3, 10) };
+            
+            // Label хранит ASCII арт, а в Tag мы кладем настоящее имя карты
+            var lbl = new Label 
+            { 
+                Text = GenerateAsciiArt(cardName), 
+                Font = new Font("Courier New", 7), 
+                Dock = DockStyle.Fill, 
+                TextAlign = ContentAlignment.MiddleCenter, 
+                BorderStyle = BorderStyle.FixedSingle, 
+                BackColor = Color.White,
+                Cursor = Cursors.Hand, // Показываем, что можно кликнуть
+                Tag = cardName // ВАЖНО: Храним тут сырое имя карты
+            };
+
+            // Обработчик клика для замены
+            lbl.Click += (s, e) => 
+            {
+                // При клике открываем меню замены
+                ShowCardSelectionMenu(lbl, timeTag, (string)lbl.Tag);
+            };
+
+            p.Controls.Add(lbl);
+            return p;
+        }
+
+        // Универсальное меню выбора (и для добавления, и для замены)
+        private void ShowCardSelectionMenu(Control anchorControl, string timeTag, string currentCardToReplace)
+        {
+            var contextMenu = new ContextMenuStrip();
+            var allUsed = selectedCards.Values.SelectMany(x => x).ToHashSet();
+
+            foreach (var card in allCardNames)
+            {
+                // Можно выбрать карту, если она нигде не используется, 
+                // ЛИБО если это та же самая карта, на которую мы кликнули (чтобы можно было "отменить", выбрав её же)
+                if (!allUsed.Contains(card) || card == currentCardToReplace)
+                {
+                    contextMenu.Items.Add(card, null, (sender, args) => 
+                    {
+                        // Если кликнули на ту же самую, ничего не делаем
+                        if (card == currentCardToReplace) return;
+
+                        if (currentCardToReplace == null)
+                        {
+                            // === ЛОГИКА ДОБАВЛЕНИЯ НОВОЙ ===
+                            selectedCards[timeTag].Add(card);
+                            
+                            // Заменяем кнопку "+" на карту
+                            var panel = (FlowLayoutPanel)anchorControl.Parent;
+                            int index = panel.Controls.IndexOf(anchorControl);
+                            panel.Controls.Remove(anchorControl);
+                            
+                            var newWidget = CreateCardWidget(card, timeTag);
+                            panel.Controls.Add(newWidget);
+                            panel.Controls.SetChildIndex(newWidget, index);
+
+                            // Добавляем новый "+" вниз
+                            AddPlusButton(panel, timeTag);
+                        }
+                        else
+                        {
+                            // === ЛОГИКА ЗАМЕНЫ СУЩЕСТВУЮЩЕЙ ===
+                            // 1. Обновляем данные
+                            int listIndex = selectedCards[timeTag].IndexOf(currentCardToReplace);
+                            if (listIndex != -1) 
+                            {
+                                selectedCards[timeTag][listIndex] = card;
+                            }
+
+                            // 2. Обновляем UI (Label)
+                            var lbl = (Label)anchorControl;
+                            lbl.Text = GenerateAsciiArt(card);
+                            lbl.Tag = card; // Обновляем скрытое значение
+                        }
+                    });
+                }
+            }
+            
+            if (contextMenu.Items.Count == 0) contextMenu.Items.Add("Нет доступных карт");
+            contextMenu.Show(anchorControl, new Point(0, anchorControl.Height));
+        }
+
+        private string GenerateSimpleAsciiArt(string c)
+        {
+            string s = c.Replace("Факт", "").Trim();
+            string[] lines = s.Split(' ').Aggregate(new List<string>{""}, (l, w) => { if((l.Last()+w).Length>10) l.Add(""); l[l.Count-1]+=w+" "; return l; }).Select(x=>x.Trim()).ToArray();
+            string r = s.Split(' ')[0];
+            return $".----------.\n| {r,-8} |\n|          |\n|{PC(lines.ElementAtOrDefault(0),10)}|\n|{PC(lines.ElementAtOrDefault(1),10)}|\n|{PC(lines.ElementAtOrDefault(2),10)}|\n|          |\n|  TAROT   |\n'----------'";
+        }
+        private string GenerateAsciiArt(string c)
+        {
+            string s = c.Replace("Факт", "").Trim();
+            Console.WriteLine(s);
+            if (ASCII_Tarot.Cards.ContainsKey(s))
+            {
+                return ASCII_Tarot.Cards[s];
+            }
+            
+            return GenerateSimpleAsciiArt(s);
+        }
+        private string PC(string s, int w) { s=s??""; if(s.Length>=w) return s.Substring(0,w); int l=(w-s.Length)/2; return s.PadLeft(l+s.Length).PadRight(w); }
+
+        // --- RUNNERS ---
 
         private void RunForward()
         {
@@ -389,56 +509,7 @@ namespace TarotExpertSystem
 
         private void PrepareRun() { logBox.Clear(); resultBox.Clear(); }
         private bool CheckCards() { if (!selectedCards.Values.Any(x => x.Count > 0)) { MessageBox.Show("Добавьте карты!"); return false; } return true; }
-
-        private FlowLayoutPanel CreateColumn(string title)
-        {
-            var pnl = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle };
-            pnl.Controls.Add(new Label { Text = title, AutoSize = false, Width = 200, Height = 30, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 12, FontStyle.Bold), ForeColor = Color.DarkSlateGray });
-            return pnl;
-        }
-
-        private void AddPlusButton(FlowLayoutPanel panel, string timeTag)
-        {
-            var btn = new Button { Text = "+", Font = new Font("Consolas", 24), Size = new Size(160, 100), Cursor = Cursors.Hand };
-            btn.Click += (s, e) => 
-            {
-                var contextMenu = new ContextMenuStrip();
-                var allUsed = selectedCards.Values.SelectMany(x => x).ToHashSet();
-                foreach (var card in allCardNames)
-                {
-                    if (!allUsed.Contains(card))
-                    {
-                        contextMenu.Items.Add(card, null, (sender, args) => 
-                        {
-                            selectedCards[timeTag].Add(card);
-                            int index = panel.Controls.IndexOf(btn);
-                            panel.Controls.Remove(btn);
-                            panel.Controls.Add(CreateCardWidget(card));
-                            AddPlusButton(panel, timeTag);
-                        });
-                    }
-                }
-                contextMenu.Show(btn, new Point(0, btn.Height));
-            };
-            panel.Controls.Add(btn);
-        }
-
-        private Control CreateCardWidget(string cardName)
-        {
-            var p = new Panel { Size = new Size(160, 140), Margin = new Padding(3, 3, 3, 10) };
-            p.Controls.Add(new Label { Text = GenerateAsciiArt(cardName), Font = new Font("Courier New", 7), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.White });
-            return p;
-        }
-
-        private string GenerateAsciiArt(string c)
-        {
-            string s = c.Replace("Факт", "").Trim();
-            string[] lines = s.Split(' ').Aggregate(new List<string>{""}, (l, w) => { if((l.Last()+w).Length>10) l.Add(""); l[l.Count-1]+=w+" "; return l; }).Select(x=>x.Trim()).ToArray();
-            string r = s.Split(' ')[0];
-            return $".----------.\n| {r,-8} |\n|          |\n|{PC(lines.ElementAtOrDefault(0),10)}|\n|{PC(lines.ElementAtOrDefault(1),10)}|\n|{PC(lines.ElementAtOrDefault(2),10)}|\n|          |\n|  TAROT   |\n'----------'";
-        }
-        private string PC(string s, int w) { s=s??""; if(s.Length>=w) return s.Substring(0,w); int l=(w-s.Length)/2; return s.PadLeft(l+s.Length).PadRight(w); }
-
+        
         private void ResetAll()
         {
             selectedCards.Keys.ToList().ForEach(k => selectedCards[k].Clear());
