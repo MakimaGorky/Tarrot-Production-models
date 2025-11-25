@@ -33,12 +33,14 @@ namespace TarotExpertSystem
         public string Goal;                 // Какую цель доказываем
         public List<Rule> ApplicableRules;  // Список всех правил для этой цели
         public int CurrentRuleIndex;        // Какое правило пробуем сейчас
-        
+        public string LastTriedSubgoal;
+
         public GoalFrame(string goal, List<Rule> rules)
         {
             Goal = goal;
             ApplicableRules = rules;
             CurrentRuleIndex = 0;
+            LastTriedSubgoal = null;
         }
     }
     
@@ -108,66 +110,120 @@ namespace TarotExpertSystem
         // Не проверяет временные модификаторы карт.
         public void RunBackwardChaining(string targetGoal, List<string> knownCards)
         {
-            OnLog?.Invoke($"--- ЗАПУСК ОБРАТНОГО ВЫВОДА ---", Color.Black);
+            OnLog?.Invoke($"--- ЗАПУСК ОБРАТНОГО ВЫВОДА (С возвратом) ---", Color.Black);
             OnLog?.Invoke($"Цель: {targetGoal}", Color.Purple);
-            OnLog?.Invoke("", Color.Black);
 
-            Stack<string> goalStack = new Stack<string>();
-            goalStack.Push(targetGoal);
+            // Множество доказанных фактов
             HashSet<string> provenFacts = new HashSet<string>(knownCards);
+            
+            // Стек состояний
+            Stack<GoalFrame> stack = new Stack<GoalFrame>();
+            
+            // Цели в стеке
             HashSet<string> currentPath = new HashSet<string>();
+
+            // Лог успешных применений
             List<string> successLog = new List<string>();
 
-            while (goalStack.Count > 0)
+            // 1. Кладем исходную цель
+            var initialRules = _knowledgeBase.Where(r => r.Conclusion == targetGoal).ToList();
+            stack.Push(new GoalFrame(targetGoal, initialRules));
+            currentPath.Add(targetGoal);
+
+            bool success = false;
+
+            while (stack.Count > 0)
             {
-                string currentGoal = goalStack.Peek();
-                if (provenFacts.Contains(currentGoal))
+                var frame = stack.Peek();
+
+                // СЛУЧАЙ 1: Цель уже доказана (кем-то ранее или является фактом)
+                if (provenFacts.Contains(frame.Goal))
                 {
-                    goalStack.Pop();
-                    currentPath.Remove(currentGoal);
+                    currentPath.Remove(frame.Goal);
+                    stack.Pop();
                     continue;
                 }
 
-                var rules = _knowledgeBase.Where(r => r.Conclusion == currentGoal).ToList();
-                if (rules.Count == 0)
+                // СЛУЧАЙ 2: Кончились правила для этой цели - откат назад
+                if (frame.CurrentRuleIndex >= frame.ApplicableRules.Count)
                 {
-                     OnLog?.Invoke($"! Тупик: '{currentGoal}' не выводится ни одним правилом.", Color.Red);
-                    return; 
+                    currentPath.Remove(frame.Goal);
+                    stack.Pop();
+                    
+                    // Если стек пуст после этого, значит мы провалили доказательство
+                    if (stack.Count == 0) success = false;
+                    
+                    continue;
                 }
 
-                bool ruleApplied = false;
-                foreach (var rule in rules)
+                // СЛУЧАЙ 3: Пробуем текущее правило
+                var rule = frame.ApplicableRules[frame.CurrentRuleIndex];
+
+                // Проверка на цикл
+                if (rule.Conditions.Any(c => currentPath.Contains(c)))
                 {
-                    if (rule.Conditions.Any(c => currentPath.Contains(c))) continue;
+                    frame.CurrentRuleIndex++;
+                    continue;
+                }
 
-                    var missingConditions = rule.Conditions
-                        .Where(c => !provenFacts.Contains(c) && !IsTimeKeyword(c))
-                        .ToList();
+                // Ищем ПЕРВОЕ НЕДОКАЗАННОЕ условие
+                // Игнорируем теги времени IsTimeKeyword потому что вот так
+                string missingCondition = rule.Conditions
+                    .FirstOrDefault(c => !provenFacts.Contains(c) && !IsTimeKeyword(c));
 
-                    if (missingConditions.Count == 0)
+                if (missingCondition == null)
+                {
+                    // УРА! Все условия доказаны (или их нет)!
+                    provenFacts.Add(frame.Goal);
+                    successLog.Add($"[{rule.Id}] {frame.Goal} <= ({string.Join(", ", rule.Conditions)})");
+                    
+                    currentPath.Remove(frame.Goal);
+                    stack.Pop();
+                    
+                    if (stack.Count == 0) success = true;
+                }
+                else
+                {
+                    // Если мы здесь, мы либо только зашли в правило, либо вернулись после неудачи.
+                    
+                    // Создаем фрейм для подцели
+                    var subRules = _knowledgeBase.Where(r => r.Conclusion == missingCondition).ToList();
+                    
+                    // Если для подцели вообще нет правил и это не факт -> тупик
+                    if (subRules.Count == 0 && !provenFacts.Contains(missingCondition))
                     {
-                        provenFacts.Add(currentGoal);
-                        successLog.Add($"[{rule.Id}] Доказано: {currentGoal} (Из: {string.Join(", ", rule.Conditions)})");
-                        goalStack.Pop();
-                        currentPath.Remove(currentGoal);
-                        ruleApplied = true;
-                        break;
+                        frame.CurrentRuleIndex++;
+                        continue;
+                    }
+                    
+                    // Отличаем "уже неудачный смешарик" или "тут первый раз"
+                    if (frame.LastTriedSubgoal == missingCondition) 
+                    {
+                        // Мы уже пробовали эту подцель для этого правила, и раз мы снова здесь, 
+                        // а факт не в provenFacts - значит правило провалено.
+                        frame.CurrentRuleIndex++;
+                        frame.LastTriedSubgoal = null;
                     }
                     else
                     {
-                        foreach (var cond in missingConditions) { goalStack.Push(cond); currentPath.Add(cond); }
-                        ruleApplied = true; 
-                        break; 
+                        // Первый раз пробуем эту подцель
+                        frame.LastTriedSubgoal = missingCondition;
+                        currentPath.Add(missingCondition);
+                        stack.Push(new GoalFrame(missingCondition, subRules));
                     }
                 }
-
-                if (!ruleApplied) { OnLog?.Invoke($"! Не удалось доказать: {currentGoal}", Color.Red); return; }
             }
 
-            OnLog?.Invoke("=== ЦЕЛЬ ДОСТИГНУТА! ===", Color.DarkGreen);
-            OnLog?.Invoke("Цепочка (только сработавшие правила):", Color.DarkGreen);
-            foreach (var line in successLog) OnLog?.Invoke(" -> " + line, Color.Black);
-            OnAdviceFound?.Invoke($"Цель '{targetGoal}' подтверждена!");
+            if (success)
+            {
+                OnLog?.Invoke("=== ГИПОТЕЗА ПОДТВЕРЖДЕНА! ===", Color.DarkGreen);
+                foreach (var line in successLog) OnLog?.Invoke(line, Color.Black);
+                OnAdviceFound?.Invoke("Утверждение верно.");
+            }
+            else
+            {
+                OnLog?.Invoke("! Гипотеза не подтвердилась (нет путей вывода).", Color.Red);
+            }
         }
 
         private void FindAndSendAdvice()
@@ -248,7 +304,6 @@ namespace TarotExpertSystem
         private List<string> allCardNames;
         private Dictionary<string, List<string>> selectedCards = new Dictionary<string, List<string>>();
 
-        // Компоненты
         private RichTextBox logBox;
         private TextBox resultBox;
         private FlowLayoutPanel pnlPast, pnlPresent, pnlFuture;
@@ -371,7 +426,7 @@ namespace TarotExpertSystem
             panel.Controls.Add(btn);
         }
 
-        // ФИЧА: Замена карты
+        // ФИЧА: Замена карты!!!
         private Control CreateCardWidget(string cardName, string timeTag)
         {
             var p = new Panel { Size = new Size(160, 240), Margin = new Padding(3, 3, 3, 10) };
@@ -385,14 +440,13 @@ namespace TarotExpertSystem
                 TextAlign = ContentAlignment.MiddleCenter, 
                 BorderStyle = BorderStyle.FixedSingle, 
                 BackColor = Color.White,
-                Cursor = Cursors.Hand, // Показываем, что можно кликнуть
-                Tag = cardName // ВАЖНО: Храним тут сырое имя карты
+                Cursor = Cursors.Hand,
+                Tag = cardName
             };
 
             // Обработчик клика для замены
             lbl.Click += (s, e) => 
             {
-                // При клике открываем меню замены
                 ShowCardSelectionMenu(lbl, timeTag, (string)lbl.Tag);
             };
 
@@ -447,7 +501,7 @@ namespace TarotExpertSystem
                             // 2. Обновляем UI (Label)
                             var lbl = (Label)anchorControl;
                             lbl.Text = GenerateAsciiArt(card);
-                            lbl.Tag = card; // Обновляем скрытое значение
+                            lbl.Tag = card;
                         }
                     });
                 }
