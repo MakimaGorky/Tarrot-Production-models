@@ -1,3 +1,7 @@
 .idea/
 */bin/
+*/*/bin/
 */obj/
+*/*/obj/
+*/Lib/
+*.rar
